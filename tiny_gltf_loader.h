@@ -1277,6 +1277,53 @@ static bool ParseStringMapProperty(std::map<std::string, std::string> *ret,
   return true;
 }
 
+static bool IsKHRBinaryExtension(const picojson::object& o) 
+{
+    std::string* err = nullptr;
+
+    picojson::object j = o;
+
+    if (j.find("extensions") == j.end()) {
+        if (err) {
+            (*err) += "`extensions' property is missing.\n";
+        }
+        return false;
+    }
+
+    if (!(j["extensions"].is<picojson::object>())) {
+        if (err) {
+            (*err) += "Invalid `extensions' property.\n";
+        }
+        return false;
+    }
+
+    picojson::object ext = j["extensions"].get<picojson::object>();
+
+    if (ext.find("KHR_binary_glTF") == ext.end()) {
+        if (err) {
+            (*err) +=
+                "`KHR_binary_glTF' property is missing in extension property.\n";
+        }
+        return false;
+    }
+
+    if (!(ext["KHR_binary_glTF"].is<picojson::object>())) {
+        if (err) {
+            (*err) += "Invalid `KHR_binary_glTF' property.\n";
+        }
+        return false;
+    }
+
+    picojson::object k = ext["KHR_binary_glTF"].get<picojson::object>();
+
+    std::string buffer_view;
+    if (!ParseStringProperty(&buffer_view, err, k, "bufferView", true)) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ParseKHRBinaryExtension(const picojson::object &o, std::string *err,
                                     std::string *buffer_view,
                                     std::string *mime_type, int *image_width,
@@ -1367,8 +1414,29 @@ static bool ParseImage(Image *image, std::string *err,
                        const picojson::object &o, const std::string &basedir,
                        bool is_binary, const unsigned char *bin_data,
                        size_t bin_size) {
+
+  bool lIsBinaryExtension = IsKHRBinaryExtension(o);
   std::string uri;
-  if (!ParseStringProperty(&uri, err, o, "uri", true)) {
+  if (!ParseStringProperty(&uri, err, o, "uri", !lIsBinaryExtension))
+  {
+      if (is_binary)
+      {
+          std::string buffer_view;
+          std::string mime_type;
+          int image_width;
+          int image_height;
+          bool ret = ParseKHRBinaryExtension(o, err, &buffer_view, &mime_type, &image_width, &image_height);
+          if (ret)
+          {
+              image->bufferView = buffer_view;
+              image->mimeType = mime_type;
+              image->width = image_width;
+              image->height = image_height;
+              return true;
+          }
+      }
+
+
     return false;
   }
 
@@ -1846,8 +1914,25 @@ static bool ParseShader(Shader *shader, std::string *err,
                         bool is_binary = false,
                         const unsigned char *bin_data = NULL,
                         size_t bin_size = 0) {
+
+  bool lIsBinaryExtension = IsKHRBinaryExtension(o);
   std::string uri;
-  if (!ParseStringProperty(&uri, err, o, "uri", true)) {
+  if (!ParseStringProperty(&uri, err, o, "uri", !lIsBinaryExtension))
+  {
+      if (is_binary)
+      {
+          std::string buffer_view;
+          std::string mime_type;
+          int image_width;
+          int image_height;
+          bool ret = ParseKHRBinaryExtension(o, err, &buffer_view, &mime_type, &image_width, &image_height);
+          if (ret)
+          {              
+              // TODO : but we don't care, read the data from view
+              return true;
+          }
+      }
+
     return false;
   }
 
@@ -2252,9 +2337,21 @@ bool TinyGLTFLoader::LoadFromString(Scene *scene, std::string *err,
     picojson::object::const_iterator itEnd(root.end());
     for (; it != itEnd; it++) {
       Buffer buffer;
-      if (!ParseBuffer(&buffer, err, (it->second).get<picojson::object>(),
-                       base_dir, is_binary_, bin_data_, bin_size_)) {
-        return false;
+
+      if (it->first.compare("binary_glTF") == 0)
+      {
+          // stupid support of binary_glTF buffers
+          //buffer.name = it->first;
+          buffer.data.resize(bin_size_);
+          memcpy((void*)&buffer.data[0], bin_data_, bin_size_);
+          // base64_decode?
+      }
+      else
+      {
+          if (!ParseBuffer(&buffer, err, (it->second).get<picojson::object>(),
+              base_dir, is_binary_, bin_data_, bin_size_)) {
+              return false;
+          }          
       }
 
       scene->buffers[it->first] = buffer;
